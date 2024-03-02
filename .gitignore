@@ -11,3 +11,4 @@ zig-out/
 .direnv/
 .devenv/
 result
+.pre-commit-config.yaml
