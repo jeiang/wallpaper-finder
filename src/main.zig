@@ -20,7 +20,7 @@ var path_buffer = [_]u8{0} ** std.fs.MAX_PATH_BYTES;
 
 // image parsers
 const parsers = .{
-    // jpg,
+    jpg,
     png,
 };
 
