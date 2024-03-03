@@ -8,7 +8,7 @@ pub fn build(b: *std.Build) void {
     const zigcli_mod = zigcli_dep.module("zig-cli");
 
     const exe = b.addExecutable(.{
-        .name = "zig",
+        .name = "wallpaper-finder",
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,
