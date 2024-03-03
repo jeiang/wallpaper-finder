@@ -1,71 +1,166 @@
 const std = @import("std");
-const common = @import("common.zig");
+const cli = @import("zig-cli");
+
+const config = @import("config.zig");
 const png = @import("png.zig");
 const jpg = @import("jpg.zig");
 
-// TODO: proper command line args
-// TODO: command line ratio specification with configurable "closeness range???" (i.e. +- 5%)
-// TODO: find a better method of allocation
-// TODO: multithread?? idk no async so not optimal
+const utils = @import("utils.zig");
+const Dimensions = utils.Dimensions;
 
-fn run(path: []const u8) !void {
-    const stdout_writer = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_writer);
-    const stdout = bw.writer();
+pub var std_options = .{
+    // Define logFn to override the std implementation
+    .logFn = @import("log.zig").customLogger,
+};
 
-    const root = try std.fs.openDirAbsolute(path, .{ .iterate = true });
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
+// allocator
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+const allocator = gpa.allocator();
+var path_buffer = [_]u8{0} ** std.fs.MAX_PATH_BYTES;
 
-    var walker = try root.walk(alloc);
-    while (try walker.next()) |entry| {
-        const basename = entry.basename;
-        if (entry.path.len < 4 or entry.kind != .file) {
-            continue; // idk how reach here but whatever
-        }
-        const len = entry.basename.len;
-        var dim: ?common.Dimensions = undefined;
-        if (std.mem.eql(u8, basename[len - 3 .. len], "jpg") or std.mem.eql(u8, basename[len - 4 .. len], "jpeg")) {
-            var file = try root.openFile(entry.path, .{});
-            dim = try jpg.checkJpgSize(&file);
-        } else if (std.mem.eql(u8, basename[len - 3 .. len], "png")) {
-            var file = try root.openFile(entry.path, .{});
-            dim = try png.checkPngSize(&file);
-        } else {
+// image parsers
+const parsers = .{
+    // jpg,
+    png,
+};
+
+// output
+const stdout_writer = std.io.getStdOut().writer();
+var bw = std.io.bufferedWriter(stdout_writer);
+const stdout = bw.writer();
+
+const logger = std.log.scoped(.main);
+
+pub fn main() !void {
+    return cli.run(config.CreateApp(run), allocator);
+}
+
+fn run() !void {
+    const conf = try config.GetConfig();
+
+    for (conf.paths) |path| {
+        const root = utils.openDir(path) catch |err| {
+            logger.err("got err {!}, skipping path: `{s}`", .{ err, path });
             continue;
-        }
-        if (dim) |dimension| {
-            const ratio = @as(f64, @floatFromInt(dimension.width)) / @as(f64, @floatFromInt(dimension.height));
-            if (1.7 < ratio and ratio < 1.8) {
-                try stdout.print("{s}{s}\n", .{
-                    path,
-                    entry.path,
-                });
+        };
+        logger.info("opened path at `{s}`", .{path});
+
+        var walker = try root.walk(allocator);
+        while (try walker.next()) |entry| {
+            logger.info("checking path: `{s}`", .{entry.path});
+            if (entry.kind != .file) {
+                logger.debug("skipping `{s}` because it is a {any}", .{ entry.path, entry.kind });
+                continue;
+            }
+            var file = root.openFile(entry.path, .{}) catch |err| {
+                logger.warn("failed to open `{s}` due to {!}, skipping", .{ entry.path, err });
+                continue;
+            };
+            defer file.close();
+            const dim = getDimensions(&file, entry.path, entry.basename) orelse continue;
+
+            const f64_dim = Dimensions(f64){
+                .height = @floatFromInt(dim.height),
+                .width = @floatFromInt(dim.width),
+            };
+            logger.debug("image dimensions of `{s}` is {any}", .{ entry.path, f64_dim });
+
+            if (checkIfWithinSize(conf.size, f64_dim)) {
+                const resolved_path = root.realpath(entry.path, &path_buffer) catch |err| {
+                    logger.err("failed to resolve path `{s}` from `{s}` because {!}", .{ entry.path, path, err });
+                    continue;
+                };
+                try stdout.print("{s}\n", .{resolved_path});
                 try bw.flush();
             }
         }
     }
 }
 
-var args_buffer = [_]u8{0} ** (1024);
+fn getDimensions(file: *std.fs.File, path: []const u8, basename: []const u8) ?Dimensions(u32) {
+    const extension_idx = std.mem.indexOfScalar(u8, basename, '.') orelse {
+        logger.debug("extension not found on `{s}`, skipping", .{path});
+        return null;
+    };
+    const extension = basename[extension_idx..basename.len];
 
-pub fn main() !void {
-    var fba = std.heap.FixedBufferAllocator.init(&args_buffer);
-    const alloc = fba.allocator();
-    var args = try std.process.ArgIterator.initWithAllocator(alloc);
-    // skip exe
-    _ = args.skip();
-    // grab path
-    if (args.next()) |path| {
-        try run(path);
-        return;
+    inline for (parsers) |parser| {
+        if (!@hasDecl(parser, "extensions") or !@hasDecl(parser, "getSize")) {
+            @compileError("parser requires field `extensions` and method getSize");
+        }
+        const getSize = @field(parser, "getSize");
+        const known_extensions = @field(parser, "extensions");
+        inline for (known_extensions) |known_extension| {
+            if (std.mem.eql(u8, known_extension, extension)) {
+                return getSize(file) catch |err| {
+                    logger.warn("failed to parse `{s}` as a " ++ known_extension ++ " due to {!}, skipping", .{ path, err });
+                    return null;
+                };
+            }
+        }
     }
 
-    const stderr_writer = std.io.getStdErr().writer();
-    var bw = std.io.bufferedWriter(stderr_writer);
-    const stderr = bw.writer();
-    try stderr.print("usage: <exe> <path>\n", .{});
-    try bw.flush();
-    return;
+    logger.debug("`{s}` did not match any files, skipping", .{path});
+    return null;
+}
+
+fn checkIfWithinSize(bounds: config.ComparisonBounds, dim: Dimensions(f64)) bool {
+    var within_size = false;
+    switch (bounds) {
+        .aspect_ratio => |ratio| {
+            const dim_ratio = dim.width / dim.height;
+            logger.debug("matching on aspect ratio with ratio {e}", .{dim_ratio});
+            switch (ratio) {
+                .above => |lower| {
+                    logger.debug("matching images horizontally wider than ratio {e}", .{lower});
+                    within_size = dim_ratio >= lower;
+                },
+                .below => |upper| {
+                    logger.debug("matching images horizontally slimmer than ratio {e}", .{upper});
+                    within_size = dim_ratio <= upper;
+                },
+                .between => |between| {
+                    logger.debug("matching images with a ratio between {e} and {e}", .{ between.lower, between.upper });
+                    within_size = between.lower <= dim_ratio and dim_ratio <= between.upper;
+                },
+            }
+        },
+        .resolution => |resolution| switch (resolution) {
+            .above => |lower| {
+                logger.debug("checking if image dimension {any} is greater than wanted dimension {any}", .{
+                    dim,
+                    lower,
+                });
+                within_size = dim.cmp(&lower) != std.math.Order.lt;
+                logger.debug("result of cmp is {any}", .{dim.cmp(&lower)});
+            },
+            .below => |upper| {
+                logger.debug("checking if image dimension {any} is less than wanted dimension {any}", .{
+                    dim,
+                    upper,
+                });
+                within_size = !(dim.cmp(&upper) == std.math.Order.gt);
+                logger.debug("result of cmp is {any}", .{upper.cmp(&dim)});
+            },
+            .between => |between| {
+                logger.debug("checking if image dimension {any} is between wanted dimension {any} and {any}", .{
+                    dim,
+                    between.lower,
+                    between.upper,
+                });
+                within_size =
+                    between.lower.cmp(&dim) != std.math.Order.lt and dim.cmp(&between.upper) != std.math.Order.lt;
+                logger.debug("result of cmp is lower: {any} and upper: {any}", .{
+                    between.lower.cmp(&dim),
+                    dim.cmp(&between.upper),
+                });
+            },
+        },
+    }
+    logger.debug("image matched: {any}", .{within_size});
+    return within_size;
+}
+
+test {
+    std.testing.refAllDeclsRecursive(@This());
 }
