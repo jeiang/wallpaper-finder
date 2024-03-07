@@ -5,6 +5,7 @@ const Dimensions = utils.Dimensions(u32);
 
 const logger = std.log.scoped(.jpg_parser);
 const jpg_signature = [_]u8{ 0xFF, 0xD8, 0xFF, 0xE0 };
+const jfif_signature = [_]u8{ 0xFF, 0xD8, 0xFF, 0xE1 };
 
 pub const extensions = .{
     ".jpg",
@@ -19,11 +20,13 @@ pub const JpgError = error{
 
 /// See https://stackoverflow.com/a/63479164 and https://web.archive.org/web/20131016210645/http://www.64lines.com/jpeg-width-height
 pub fn getSize(file: *fs.File) !Dimensions {
-    var signature = [_]u8{0} ** jpg_signature.len;
-    const bytes_read = try file.readAll(&signature);
-    if (bytes_read < signature.len or !std.mem.eql(u8, &jpg_signature, &signature)) {
-        logger.warn("file does not have a jpg signature: expected {X}, got {X}", .{
+    var signature_buf = [_]u8{0} ** jpg_signature.len;
+    const bytes_read = try file.readAll(&signature_buf);
+    const signature = signature_buf[0..bytes_read];
+    if (!std.mem.eql(u8, &jpg_signature, signature) and !std.mem.eql(u8, &jfif_signature, signature)) {
+        logger.warn("file does not have a jpg signature: expected either {X} or {X}, got {X}", .{
             jpg_signature,
+            jfif_signature,
             signature,
         });
         return JpgError.MissingSignature;
