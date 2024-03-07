@@ -44,7 +44,7 @@ pub fn getSize(file: *fs.File) !Dimensions {
         const marker = try readu16be(file);
 
         if (!isFrameMarker(marker)) {
-            logger.warn("while searching for the SOF marker, jumped to an invalid frame marker, expected {X} got {X}", .{
+            logger.warn("while searching for the SOF marker, jumped to an invalid frame marker, expected 0x{X} got 0x{X}", .{
                 0xFF,
                 marker,
             });
@@ -55,7 +55,7 @@ pub fn getSize(file: *fs.File) !Dimensions {
             // goto next block
             block_size = try readu16be(file);
             block_size -= 2; // account for reading of block
-            logger.debug("found {X} marker, skipping ahead {X} bytes to next frame", .{ marker, block_size });
+            logger.debug("found 0X{X} marker, skipping ahead {d} bytes to next frame", .{ marker, block_size });
             continue;
         }
 

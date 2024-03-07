@@ -98,6 +98,14 @@ fn getDimensions(file: *std.fs.File, skip_extension_check: bool, path: []const u
             return null;
         };
         const extension = basename[extension_idx..basename.len];
+        const lowercase_extension = allocator.alloc(u8, extension.len) catch |err| {
+            logger.err("failed to allocate space for lowercase extension because {!}", .{err});
+            return null;
+        };
+        defer allocator.free(lowercase_extension);
+        for (0.., lowercase_extension) |idx, *char| {
+            char.* = std.ascii.toLower(extension[idx]);
+        }
 
         inline for (parsers) |parser| {
             if (!@hasDecl(parser, "extensions") or !@hasDecl(parser, "getSize")) {
@@ -106,7 +114,7 @@ fn getDimensions(file: *std.fs.File, skip_extension_check: bool, path: []const u
             const getSize = @field(parser, "getSize");
             const known_extensions = @field(parser, "extensions");
             inline for (known_extensions) |known_extension| {
-                if (std.mem.eql(u8, known_extension, extension)) {
+                if (std.mem.eql(u8, known_extension, lowercase_extension)) {
                     return getSize(file) catch |err| {
                         logger.warn("failed to parse `{s}` as a " ++ known_extension ++ " due to {!}, skipping", .{ path, err });
                         return null;
