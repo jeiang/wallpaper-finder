@@ -25,9 +25,7 @@ const parsers = .{
 };
 
 // output
-const stdout_writer = std.io.getStdOut().writer();
-var bw = std.io.bufferedWriter(stdout_writer);
-const stdout = bw.writer();
+const stdout = std.io.getStdOut().writer();
 
 const logger = std.log.scoped(.main);
 
@@ -71,7 +69,6 @@ fn run() !void {
                     continue;
                 };
                 try stdout.print("{s}\n", .{resolved_path});
-                try bw.flush();
             }
         }
     }
