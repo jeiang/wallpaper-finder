@@ -29,6 +29,8 @@ const stdout = std.io.getStdOut().writer();
 
 const logger = std.log.scoped(.main);
 
+const cwd = std.fs.cwd();
+
 pub fn main() !void {
     return cli.run(config.CreateApp(run), allocator);
 }
@@ -37,44 +39,63 @@ fn run() !void {
     const conf = try config.GetConfig();
 
     for (conf.paths) |path| {
-        const root = utils.openDir(path) catch |err| {
-            logger.err("got err {!}, skipping path: `{s}`", .{ err, path });
+        const path_details = cwd.statFile(path) catch |err| {
+            logger.err("failed to check path {s} because {!}", .{ path, err });
             continue;
         };
-        logger.info("opened path at `{s}`", .{path});
-
-        var walker = try root.walk(allocator);
-        while (try walker.next()) |entry| {
-            logger.info("checking path: `{s}`", .{entry.path});
-            if (entry.kind != .file) {
-                logger.debug("skipping `{s}` because it is a {any}", .{ entry.path, entry.kind });
-                continue;
-            }
-            var file = root.openFile(entry.path, .{}) catch |err| {
-                logger.warn("failed to open `{s}` due to {!}, skipping", .{ entry.path, err });
-                continue;
-            };
-            defer file.close();
-            const dim = getDimensions(&file, conf.skip_extension_check, entry.path, entry.basename) orelse continue;
-
-            const f64_dim = Dimensions(f64){
-                .height = @floatFromInt(dim.height),
-                .width = @floatFromInt(dim.width),
-            };
-            logger.debug("image dimensions of `{s}` is {any}", .{ entry.path, f64_dim });
-
-            if (checkIfWithinSize(conf.size, f64_dim)) {
-                const resolved_path = root.realpath(entry.path, &path_buffer) catch |err| {
-                    logger.err("failed to resolve path `{s}` from `{s}` because {!}", .{ entry.path, path, err });
+        logger.debug("matched {s} as {any}", .{ path, path_details.kind });
+        switch (path_details.kind) {
+            .directory => {
+                const root = cwd.openDir(path, .{ .iterate = true }) catch |err| {
+                    logger.err("got err {!}, skipping path: `{s}`", .{ err, path });
                     continue;
                 };
-                try stdout.print("{s}\n", .{resolved_path});
-            }
+                logger.info("opened path at `{s}`", .{path});
+
+                var walker = try root.walk(allocator);
+                while (try walker.next()) |entry| {
+                    logger.info("checking path: `{s}`", .{entry.path});
+                    if (entry.kind != .file) {
+                        logger.debug("skipping `{s}` because it is a {any}", .{ entry.path, entry.kind });
+                        continue;
+                    }
+                    loadAndPrintFile(root, entry.path, conf.size, conf.skip_extension_check);
+                }
+            },
+            .file => {
+                loadAndPrintFile(cwd, path, conf.size, conf.skip_extension_check);
+            },
+            else => {
+                logger.debug("skipping `{s}` because it is a {any}", .{ path, path_details.kind });
+            },
         }
     }
 }
 
-fn getDimensions(file: *std.fs.File, skip_extension_check: bool, path: []const u8, basename: []const u8) ?Dimensions(u32) {
+fn loadAndPrintFile(root: std.fs.Dir, path: []const u8, size: config.ComparisonBounds, skip_extension_check: bool) void {
+    var file = root.openFile(path, .{}) catch |err| {
+        logger.warn("failed to open `{s}` due to {!}, skipping", .{ path, err });
+        return;
+    };
+    defer file.close();
+    const dim = getDimensions(&file, skip_extension_check, path) orelse return;
+
+    const f64_dim = Dimensions(f64){
+        .height = @floatFromInt(dim.height),
+        .width = @floatFromInt(dim.width),
+    };
+    logger.debug("image dimensions of `{s}` is {any}", .{ path, f64_dim });
+
+    if (checkIfWithinSize(size, f64_dim)) {
+        const resolved_path = root.realpath(path, &path_buffer) catch |err| {
+            logger.err("failed to resolve path `{s}` because {!}", .{ path, err });
+            return;
+        };
+        stdout.print("{s}\n", .{resolved_path}) catch {};
+    }
+}
+
+fn getDimensions(file: *std.fs.File, skip_extension_check: bool, path: []const u8) ?Dimensions(u32) {
     if (skip_extension_check) {
         inline for (parsers) |parser| {
             if (!@hasDecl(parser, "extensions") or !@hasDecl(parser, "getSize")) {
@@ -93,11 +114,11 @@ fn getDimensions(file: *std.fs.File, skip_extension_check: bool, path: []const u
             }
         }
     } else {
-        const extension_idx = std.mem.indexOfScalar(u8, basename, '.') orelse {
+        const extension_idx = std.mem.indexOfScalar(u8, path, '.') orelse {
             logger.debug("extension not found on `{s}`, skipping", .{path});
             return null;
         };
-        const extension = basename[extension_idx..basename.len];
+        const extension = path[extension_idx..path.len];
         const lowercase_extension = allocator.alloc(u8, extension.len) catch |err| {
             logger.err("failed to allocate space for lowercase extension because {!}", .{err});
             return null;

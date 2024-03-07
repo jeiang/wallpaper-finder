@@ -55,7 +55,7 @@ pub fn getSize(file: *fs.File) !Dimensions {
             // goto next block
             block_size = try readu16be(file);
             block_size -= 2; // account for reading of block
-            logger.debug("found 0X{X} marker, skipping ahead {d} bytes to next frame", .{ marker, block_size });
+            logger.debug("found 0x{X} marker, skipping ahead {d} bytes to next frame", .{ marker, block_size });
             continue;
         }
 

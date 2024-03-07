@@ -79,10 +79,3 @@ pub const ImageError = error{
     MissingSignature,
     ReachedEof,
 };
-
-// get cwd fd
-const cwd = std.fs.cwd();
-
-pub fn openDir(path: []const u8) std.fs.File.OpenError!std.fs.Dir {
-    return cwd.openDir(path, .{ .iterate = true });
-}
