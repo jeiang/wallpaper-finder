@@ -55,7 +55,7 @@ fn run() !void {
                 continue;
             };
             defer file.close();
-            const dim = getDimensions(&file, entry.path, entry.basename) orelse continue;
+            const dim = getDimensions(&file, conf.skip_extension_check, entry.path, entry.basename) orelse continue;
 
             const f64_dim = Dimensions(f64){
                 .height = @floatFromInt(dim.height),
@@ -74,25 +74,44 @@ fn run() !void {
     }
 }
 
-fn getDimensions(file: *std.fs.File, path: []const u8, basename: []const u8) ?Dimensions(u32) {
-    const extension_idx = std.mem.indexOfScalar(u8, basename, '.') orelse {
-        logger.debug("extension not found on `{s}`, skipping", .{path});
-        return null;
-    };
-    const extension = basename[extension_idx..basename.len];
-
-    inline for (parsers) |parser| {
-        if (!@hasDecl(parser, "extensions") or !@hasDecl(parser, "getSize")) {
-            @compileError("parser requires field `extensions` and method getSize");
+fn getDimensions(file: *std.fs.File, skip_extension_check: bool, path: []const u8, basename: []const u8) ?Dimensions(u32) {
+    if (skip_extension_check) {
+        inline for (parsers) |parser| {
+            if (!@hasDecl(parser, "extensions") or !@hasDecl(parser, "getSize")) {
+                @compileError("parser requires field `extensions` and method getSize");
+            }
+            const getSize = @field(parser, "getSize");
+            const possible_size = getSize(file);
+            if (possible_size) |size| {
+                return size;
+            } else |err| {
+                if (err == utils.ImageError.MissingSignature) {
+                    logger.info("{s} did not match " ++ @typeName(parser) ++ "'s signature, continuing checks", .{path});
+                } else {
+                    logger.warn("failed to parse `{s}` as a " ++ @typeName(parser) ++ " due to {!}, skipping despite matching signature", .{ path, err });
+                }
+            }
         }
-        const getSize = @field(parser, "getSize");
-        const known_extensions = @field(parser, "extensions");
-        inline for (known_extensions) |known_extension| {
-            if (std.mem.eql(u8, known_extension, extension)) {
-                return getSize(file) catch |err| {
-                    logger.warn("failed to parse `{s}` as a " ++ known_extension ++ " due to {!}, skipping", .{ path, err });
-                    return null;
-                };
+    } else {
+        const extension_idx = std.mem.indexOfScalar(u8, basename, '.') orelse {
+            logger.debug("extension not found on `{s}`, skipping", .{path});
+            return null;
+        };
+        const extension = basename[extension_idx..basename.len];
+
+        inline for (parsers) |parser| {
+            if (!@hasDecl(parser, "extensions") or !@hasDecl(parser, "getSize")) {
+                @compileError("parser requires field `extensions` and method getSize");
+            }
+            const getSize = @field(parser, "getSize");
+            const known_extensions = @field(parser, "extensions");
+            inline for (known_extensions) |known_extension| {
+                if (std.mem.eql(u8, known_extension, extension)) {
+                    return getSize(file) catch |err| {
+                        logger.warn("failed to parse `{s}` as a " ++ known_extension ++ " due to {!}, skipping", .{ path, err });
+                        return null;
+                    };
+                }
             }
         }
     }

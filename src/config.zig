@@ -17,6 +17,7 @@ const RawConfig = struct {
     tolerance: f32 = 5.0,
     relative_size: RelativeSize = .approx,
     log_level: std.log.Level = .err,
+    skip_extension_check: bool = false,
 };
 pub fn Bounds(comptime T: type) type {
     return union(enum) {
@@ -35,6 +36,7 @@ pub const ComparisonBounds = union(enum) {
 pub const Config = struct {
     paths: []const []const u8,
     size: ComparisonBounds,
+    skip_extension_check: bool,
 };
 pub const ConfigError = error{
     InvalidTolerance,
@@ -190,6 +192,7 @@ pub fn GetConfig() ConfigError!Config {
     config = Config{
         .paths = paths,
         .size = bounds,
+        .skip_extension_check = raw_config.skip_extension_check,
     };
     return config.?;
 }
@@ -250,6 +253,14 @@ var cli_log_level = cli.Option{
     .value_ref = cli.mkRef(&raw_config.log_level),
 };
 
+var cli_skip_extension_check = cli.Option{
+    .long_name = "skip-extension-check",
+    .help =
+    \\ do not try to match known file extensions, just read the file signature and try to match
+    ,
+    .value_ref = cli.mkRef(&raw_config.skip_extension_check),
+};
+
 var app: cli.App = undefined;
 
 pub fn CreateApp(entrypoint: cli.ExecFn) *cli.App {
@@ -265,6 +276,7 @@ pub fn CreateApp(entrypoint: cli.ExecFn) *cli.App {
                 &cli_tolerance,
                 &cli_relative_size,
                 &cli_log_level,
+                &cli_skip_extension_check,
             },
             .target = cli.CommandTarget{
                 .action = cli.CommandAction{
